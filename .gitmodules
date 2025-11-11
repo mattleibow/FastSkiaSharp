@@ -6,4 +6,4 @@
 	url = https://github.com/wieslawsoltes/SkiaSharp.git
 [submodule "extern/skia"]
 	path = extern/skia
-	url = https://github.com/wieslawsoltes/skia.git
+	url = https://github.com/mattleibow/skia.git

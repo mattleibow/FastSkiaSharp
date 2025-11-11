@@ -1,7 +1,7 @@
 #include "include/core/SkCanvas.h"
 #include "include/core/SkColor.h"
 #include "include/core/SkPaint.h"
-#include "include/core/SkPathBuilder.h"
+#include "include/core/SkPath.h"
 #include "include/core/SkPoint.h"
 #include "include/core/SkSurface.h"
 #include "tools/sk_app/Application.h"
@@ -18,7 +18,6 @@
 #include <cstring>
 #include <memory>
 #include <random>
-#include <string>
 #include <utility>
 #include <vector>
 
@@ -107,7 +106,7 @@ public:
         const float offsetX = (static_cast<float>(fWidth) - uniformScale * (kGridWidth + 1)) * 0.5f;
         const float offsetY = (static_cast<float>(fHeight) - uniformScale * (kGridHeight + 1)) * 0.5f;
 
-        SkPathBuilder pathBuilder;
+        SkPath path;
         bool pathStarted = false;
 
         for (size_t i = 0; i < fElements.size(); ++i) {
@@ -115,36 +114,37 @@ public:
 
             if (!pathStarted) {
                 const SkPoint start = this->toPoint(element.start, uniformScale, offsetX, offsetY);
-                pathBuilder.moveTo(start);
+                path.moveTo(start);
                 pathStarted = true;
             }
 
             switch (element.kind) {
                 case SegmentKind::kLine: {
                     const SkPoint end = this->toPoint(element.end, uniformScale, offsetX, offsetY);
-                    pathBuilder.lineTo(end);
+                    path.lineTo(end);
                     break;
                 }
                 case SegmentKind::kQuad: {
                     const SkPoint c1 = this->toPoint(element.control1, uniformScale, offsetX, offsetY);
                     const SkPoint end = this->toPoint(element.end, uniformScale, offsetX, offsetY);
-                    pathBuilder.quadTo(c1, end);
+                    path.quadTo(c1, end);
                     break;
                 }
                 case SegmentKind::kCubic: {
                     const SkPoint c1 = this->toPoint(element.control1, uniformScale, offsetX, offsetY);
                     const SkPoint c2 = this->toPoint(element.control2, uniformScale, offsetX, offsetY);
                     const SkPoint end = this->toPoint(element.end, uniformScale, offsetX, offsetY);
-                    pathBuilder.cubicTo(c1, c2, end);
+                    path.cubicTo(c1, c2, end);
                     break;
                 }
             }
 
             const bool finalize = element.split || i + 1 == fElements.size();
-            if (finalize && !pathBuilder.isEmpty()) {
+            if (finalize && !path.isEmpty()) {
                 fStrokePaint.setColor(element.color);
                 fStrokePaint.setStrokeWidth(element.width);
-                canvas->drawPath(pathBuilder.detach(), fStrokePaint);
+                canvas->drawPath(path, fStrokePaint);
+                path.reset();
                 pathStarted = false;
             }
 
@@ -283,44 +283,40 @@ public:
         }
 
         bool attached = false;
-        const char* backendName = "Raster";
-
-        auto tryAttach = [&](sk_app::Window::BackendType type, const char* name) {
-            if (!attached && fWindow->attach(type)) {
-                attached = true;
-                backendName = name;
-            }
-        };
 
 #if defined(SK_GRAPHITE)
     #if defined(SK_METAL)
-        tryAttach(sk_app::Window::kGraphiteMetal_BackendType, "Graphite (Metal)");
+        attached = fWindow->attach(sk_app::Window::kGraphiteMetal_BackendType);
     #elif defined(SK_DAWN)
-        tryAttach(sk_app::Window::kGraphiteDawn_BackendType, "Graphite (Dawn)");
+        attached = fWindow->attach(sk_app::Window::kGraphiteDawn_BackendType);
     #elif defined(SK_VULKAN)
-        tryAttach(sk_app::Window::kGraphiteVulkan_BackendType, "Graphite (Vulkan)");
+        attached = fWindow->attach(sk_app::Window::kGraphiteVulkan_BackendType);
     #endif
 #endif
 
 #if defined(SK_METAL)
-        tryAttach(sk_app::Window::kMetal_BackendType, "Metal");
+        if (!attached) {
+            attached = fWindow->attach(sk_app::Window::kMetal_BackendType);
+        }
 #endif
 
 #if defined(SK_GL)
-        tryAttach(sk_app::Window::kNativeGL_BackendType, "OpenGL");
+        if (!attached) {
+            attached = fWindow->attach(sk_app::Window::kNativeGL_BackendType);
+        }
 #endif
 
-        tryAttach(sk_app::Window::kRaster_BackendType, "Raster");
+        if (!attached) {
+            attached = fWindow->attach(sk_app::Window::kRaster_BackendType);
+        }
 
         if (!attached) {
             return false;
         }
 
-        skwindow::DisplayParamsBuilder paramsBuilder(fWindow->getRequestedDisplayParams());
-        paramsBuilder.msaaSampleCount(4);
-        fWindow->setRequestedDisplayParams(paramsBuilder.detach());
-
-        fBackendLabel = backendName;
+        skwindow::DisplayParams params = fWindow->getRequestedDisplayParams();
+        params.fMSAASampleCount = 4;
+        fWindow->setRequestedDisplayParams(params);
 
         fLayer = std::make_unique<MotionMarkLayer>();
         if (fRequestedComplexity >= 0) {
@@ -329,13 +325,7 @@ public:
 
         fLayer->onResize(fWindow->width(), fWindow->height());
         fWindow->pushLayer(fLayer.get());
-
-        char initialTitle[160];
-        std::snprintf(initialTitle,
-                      sizeof(initialTitle),
-                      "MotionMark Native (Skia)  |  Backend %s",
-                      fBackendLabel.c_str());
-        fWindow->setTitle(initialTitle);
+        fWindow->setTitle("MotionMark Native (Skia)");
         fWindow->show();
         fWindow->inval();
 
@@ -359,8 +349,7 @@ public:
             char title[160];
             std::snprintf(title,
                           sizeof(title),
-                          "MotionMark Native (Skia)  |  Backend %s  |  %.1f FPS  |  Complexity %d  |  Elements %zu",
-                          fBackendLabel.c_str(),
+                          "MotionMark Native (Skia)  |  %.1f FPS  |  Complexity %d  |  Elements %zu",
                           fps,
                           fLayer->complexity(),
                           fLayer->elementCount());
@@ -377,7 +366,6 @@ private:
     double fAccumulatedTime = 0.0;
     int fFrameCounter = 0;
     int fRequestedComplexity = -1;
-    std::string fBackendLabel = "Raster";
 };
 
 int parseComplexityArg(int argc, char** argv) {
@@ -394,7 +382,7 @@ int parseComplexityArg(int argc, char** argv) {
 }  // namespace
 
 sk_app::Application* sk_app::Application::Create(int argc, char** argv, void* platformData) {
-    std::unique_ptr<sk_app::Window> window(sk_app::Windows::CreateNativeWindow(platformData));
+    std::unique_ptr<sk_app::Window> window(sk_app::Window::CreateNativeWindow(platformData));
     if (!window) {
         return nullptr;
     }
