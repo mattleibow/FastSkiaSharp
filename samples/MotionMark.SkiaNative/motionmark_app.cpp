@@ -1,9 +1,10 @@
-#include "include/core/SkCanvas.h"
-#include "include/core/SkColor.h"
-#include "include/core/SkPaint.h"
-#include "include/core/SkPath.h"
-#include "include/core/SkPoint.h"
-#include "include/core/SkSurface.h"
+// MotionMark using only Skia C API
+#include "include/c/sk_canvas.h"
+#include "include/c/sk_paint.h"
+#include "include/c/sk_path.h"
+#include "include/c/sk_surface.h"
+#include "include/c/sk_types.h"
+
 #include "tools/sk_app/Application.h"
 #include "tools/sk_app/Window.h"
 #include "tools/window/DisplayParams.h"
@@ -28,14 +29,14 @@ using Clock = std::chrono::steady_clock;
 constexpr int kGridWidth = 80;
 constexpr int kGridHeight = 40;
 
-constexpr std::array<SkColor, 7> kPalette = {
-        SkColorSetARGB(0xFF, 0x10, 0x10, 0x10),
-        SkColorSetARGB(0xFF, 0x80, 0x80, 0x80),
-        SkColorSetARGB(0xFF, 0xC0, 0xC0, 0xC0),
-        SkColorSetARGB(0xFF, 0x10, 0x10, 0x10),
-        SkColorSetARGB(0xFF, 0x80, 0x80, 0x80),
-        SkColorSetARGB(0xFF, 0xC0, 0xC0, 0xC0),
-        SkColorSetARGB(0xFF, 0xE0, 0x10, 0x40),
+const std::array<sk_color_t, 7> kPalette = {
+        static_cast<sk_color_t>(sk_color_set_argb(0xFF, 0x10, 0x10, 0x10)),
+        static_cast<sk_color_t>(sk_color_set_argb(0xFF, 0x80, 0x80, 0x80)),
+        static_cast<sk_color_t>(sk_color_set_argb(0xFF, 0xC0, 0xC0, 0xC0)),
+        static_cast<sk_color_t>(sk_color_set_argb(0xFF, 0x10, 0x10, 0x10)),
+        static_cast<sk_color_t>(sk_color_set_argb(0xFF, 0x80, 0x80, 0x80)),
+        static_cast<sk_color_t>(sk_color_set_argb(0xFF, 0xC0, 0xC0, 0xC0)),
+        static_cast<sk_color_t>(sk_color_set_argb(0xFF, 0xE0, 0x10, 0x40)),
 };
 
 constexpr std::array<std::pair<int, int>, 4> kOffsets = {{
@@ -62,7 +63,7 @@ struct Element {
     GridPoint control1;
     GridPoint control2;
     GridPoint end;
-    SkColor color = SK_ColorWHITE;
+    sk_color_t color = 0xFFFFFFFF;
     float width = 1.0f;
     bool split = false;
 };
@@ -71,16 +72,30 @@ class MotionMarkLayer final : public sk_app::Window::Layer {
 public:
     MotionMarkLayer()
         : fRng(static_cast<uint32_t>(Clock::now().time_since_epoch().count())) {
-        fStrokePaint.setAntiAlias(true);
-        fStrokePaint.setStyle(SkPaint::kStroke_Style);
-        fStrokePaint.setStrokeCap(SkPaint::kRound_Cap);
-        fStrokePaint.setStrokeJoin(SkPaint::kRound_Join);
+        
+        // Create stroke paint
+        fStrokePaint = sk_paint_new();
+        sk_paint_set_antialias(fStrokePaint, true);
+        sk_paint_set_style(fStrokePaint, STROKE_SK_PAINT_STYLE);
+        sk_paint_set_stroke_cap(fStrokePaint, ROUND_SK_STROKE_CAP);
+        sk_paint_set_stroke_join(fStrokePaint, ROUND_SK_STROKE_JOIN);
 
-        fBackgroundPaint.setStyle(SkPaint::kFill_Style);
-        fBackgroundPaint.setColor(SkColorSetRGB(12, 16, 24));
+        // Create background paint
+        fBackgroundPaint = sk_paint_new();
+        sk_paint_set_style(fBackgroundPaint, FILL_SK_PAINT_STYLE);
+        sk_paint_set_color(fBackgroundPaint, sk_color_set_argb(0xFF, 12, 16, 24));
 
         fElements.reserve(this->computeElementCount(fComplexity));
         this->resizeElements(this->computeElementCount(fComplexity));
+    }
+
+    ~MotionMarkLayer() override {
+        if (fStrokePaint) {
+            sk_paint_delete(fStrokePaint);
+        }
+        if (fBackgroundPaint) {
+            sk_paint_delete(fBackgroundPaint);
+        }
     }
 
     void onResize(int width, int height) override {
@@ -89,8 +104,12 @@ public:
     }
 
     void onPaint(SkSurface* surface) override {
-        SkCanvas* canvas = surface->getCanvas();
-        canvas->clear(fBackgroundPaint.getColor());
+        // Get canvas using C API
+        sk_canvas_t* canvas = sk_surface_get_canvas(reinterpret_cast<sk_surface_t*>(surface));
+        
+        // Clear canvas
+        sk_color_t bgColor = sk_paint_get_color(fBackgroundPaint);
+        sk_canvas_clear(canvas, bgColor);
 
         if (fElements.empty()) {
             return;
@@ -106,45 +125,45 @@ public:
         const float offsetX = (static_cast<float>(fWidth) - uniformScale * (kGridWidth + 1)) * 0.5f;
         const float offsetY = (static_cast<float>(fHeight) - uniformScale * (kGridHeight + 1)) * 0.5f;
 
-        SkPath path;
+        sk_path_t* path = sk_path_new();
         bool pathStarted = false;
 
         for (size_t i = 0; i < fElements.size(); ++i) {
             Element& element = fElements[i];
 
             if (!pathStarted) {
-                const SkPoint start = this->toPoint(element.start, uniformScale, offsetX, offsetY);
-                path.moveTo(start);
+                sk_point_t start = this->toPoint(element.start, uniformScale, offsetX, offsetY);
+                sk_path_move_to(path, start.x, start.y);
                 pathStarted = true;
             }
 
             switch (element.kind) {
                 case SegmentKind::kLine: {
-                    const SkPoint end = this->toPoint(element.end, uniformScale, offsetX, offsetY);
-                    path.lineTo(end);
+                    sk_point_t end = this->toPoint(element.end, uniformScale, offsetX, offsetY);
+                    sk_path_line_to(path, end.x, end.y);
                     break;
                 }
                 case SegmentKind::kQuad: {
-                    const SkPoint c1 = this->toPoint(element.control1, uniformScale, offsetX, offsetY);
-                    const SkPoint end = this->toPoint(element.end, uniformScale, offsetX, offsetY);
-                    path.quadTo(c1, end);
+                    sk_point_t c1 = this->toPoint(element.control1, uniformScale, offsetX, offsetY);
+                    sk_point_t end = this->toPoint(element.end, uniformScale, offsetX, offsetY);
+                    sk_path_quad_to(path, c1.x, c1.y, end.x, end.y);
                     break;
                 }
                 case SegmentKind::kCubic: {
-                    const SkPoint c1 = this->toPoint(element.control1, uniformScale, offsetX, offsetY);
-                    const SkPoint c2 = this->toPoint(element.control2, uniformScale, offsetX, offsetY);
-                    const SkPoint end = this->toPoint(element.end, uniformScale, offsetX, offsetY);
-                    path.cubicTo(c1, c2, end);
+                    sk_point_t c1 = this->toPoint(element.control1, uniformScale, offsetX, offsetY);
+                    sk_point_t c2 = this->toPoint(element.control2, uniformScale, offsetX, offsetY);
+                    sk_point_t end = this->toPoint(element.end, uniformScale, offsetX, offsetY);
+                    sk_path_cubic_to(path, c1.x, c1.y, c2.x, c2.y, end.x, end.y);
                     break;
                 }
             }
 
             const bool finalize = element.split || i + 1 == fElements.size();
-            if (finalize && !path.isEmpty()) {
-                fStrokePaint.setColor(element.color);
-                fStrokePaint.setStrokeWidth(element.width);
-                canvas->drawPath(path, fStrokePaint);
-                path.reset();
+            if (finalize) {
+                sk_paint_set_color(fStrokePaint, element.color);
+                sk_paint_set_stroke_width(fStrokePaint, element.width);
+                sk_canvas_draw_path(canvas, path, fStrokePaint);
+                sk_path_reset(path);
                 pathStarted = false;
             }
 
@@ -152,6 +171,8 @@ public:
                 element.split = !element.split;
             }
         }
+
+        sk_path_delete(path);
     }
 
     void setComplexity(int complexity) {
@@ -254,16 +275,17 @@ private:
         return GridPoint{x, y};
     }
 
-    static SkPoint toPoint(const GridPoint& pt, float scale, float offsetX, float offsetY) {
-        const float px = offsetX + (static_cast<float>(pt.x) + 0.5f) * scale;
-        const float py = offsetY + (static_cast<float>(pt.y) + 0.5f) * scale;
-        return SkPoint::Make(px, py);
+    static sk_point_t toPoint(const GridPoint& pt, float scale, float offsetX, float offsetY) {
+        sk_point_t result;
+        result.x = offsetX + (static_cast<float>(pt.x) + 0.5f) * scale;
+        result.y = offsetY + (static_cast<float>(pt.y) + 0.5f) * scale;
+        return result;
     }
 
     std::vector<Element> fElements;
     GridPoint fLastGridPoint{kGridWidth / 2, kGridHeight / 2};
-    SkPaint fStrokePaint;
-    SkPaint fBackgroundPaint;
+    sk_paint_t* fStrokePaint = nullptr;
+    sk_paint_t* fBackgroundPaint = nullptr;
     std::mt19937 fRng;
     std::uniform_real_distribution<float> fUnitDist{0.0f, 1.0f};
     int fComplexity = 8;
@@ -325,7 +347,7 @@ public:
 
         fLayer->onResize(fWindow->width(), fWindow->height());
         fWindow->pushLayer(fLayer.get());
-        fWindow->setTitle("MotionMark Native (Skia)");
+        fWindow->setTitle("MotionMark Native (Skia C API)");
         fWindow->show();
         fWindow->inval();
 
@@ -349,7 +371,7 @@ public:
             char title[160];
             std::snprintf(title,
                           sizeof(title),
-                          "MotionMark Native (Skia)  |  %.1f FPS  |  Complexity %d  |  Elements %zu",
+                          "MotionMark Native (Skia C API)  |  %.1f FPS  |  Complexity %d  |  Elements %zu",
                           fps,
                           fLayer->complexity(),
                           fLayer->elementCount());
